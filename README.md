@@ -68,12 +68,13 @@ cargo test
 
 ## Environment variables
 
-None.
+- `VITE_API_BASE` - Base URL for the API used by the dashboard (set in `payment-dashboard/.env`).
 
 ## Architecture notes
 
-- The React dashboard provides the user interface.
-- The Node.js server exposes APIs used by the dashboard.
+- The React dashboard runs on `http://localhost:3000` in dev (Vite) and provides the UI.
+- The dashboard calls the Node.js API at `http://localhost:5000` via `VITE_API_BASE` and a `/api` proxy.
+- The Node.js server exposes `/federation`, `/register`, `/lookup`, and `/health` for username/payment lookups.
 - The Soroban contract handles on-chain payment routing logic.
 
 ## License
