@@ -82,12 +82,12 @@ app.post('/register', (req, res) => {
   db.get(
     'SELECT username FROM username_registry WHERE address = ?',
     [address],
-    (lookupError, row) => {
+    (lookupError, existingRow) => {
       if (lookupError) {
         return res.status(500).json({ detail: 'Database lookup failed' });
       }
 
-      if (row) {
+      if (existingRow) {
         return res.status(409).json({ detail: 'Address already registered' });
       }
 
@@ -129,7 +129,8 @@ app.get('/lookup', (req, res) => {
         return res.status(404).json({ detail: 'Username not found for this address' });
       }
 
-      return res.json({ username: row.username, address });
+      const { username } = row;
+      return res.json({ username, address });
     },
   );
 });
