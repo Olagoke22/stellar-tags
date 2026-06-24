@@ -1,7 +1,9 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import freighterApi from '@stellar/freighter-api'
 import { useDebounce } from './useDebounce'
+ feat/server-time-endpoint
 import ScrollToTop from './ScrollToTop'
+
 
 const CONTRACT_ID = 'CDNQ7OMHIFOLZHOKWQLOGDW7CF3DRMKXJC6OULNGNBWF4O4NO2NEIGER'
 const TREASURY_ADDRESS = 'GAAFWEZKDYPXLTQGKQ3F23TXWYQUDAYTDW7P7VUQSVJFW2GWC4Y6LWST'
@@ -763,11 +765,11 @@ function Dashboard({
                 <div className="form-actions">
                   <button
                     type="button"
-                    className="accent-btn"
+                    className="accent-btn disabled:opacity-50 disabled:cursor-not-allowed"
                     onClick={handleLookup}
-                    disabled={!userPublicKey || isProcessing}
+                    disabled={!userPublicKey || isProcessing || !amount || Number(amount) <= 0}
                   >
-                    {isProcessing ? 'Processing...' : 'Transfer'}
+                    {isProcessing ? <LoadingSpinner /> : 'Transfer'}
                   </button>
                   <button
                     type="button"
@@ -1912,7 +1914,7 @@ function RegistrationPage({ userPublicKey, setUserPublicKey, onBack, onRegistere
     }
   }
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
     const cleaned = username.trim()
     const normalizedUsername = normalizeNameTag(cleaned)
@@ -1928,6 +1930,20 @@ function RegistrationPage({ userPublicKey, setUserPublicKey, onBack, onRegistere
     }
 
     setIsSubmitting(true)
+    setStatusMessage('Approve the signature request in Freighter...', 'neutral')
+
+    let signature
+    try {
+      const message = `register:${normalizedUsername}:${userPublicKey}`
+      const result = await freighterApi.signMessage(message, { address: userPublicKey })
+      if (result.error) throw new Error(result.error)
+      signature = result.signedMessage
+    } catch (err) {
+      setStatusMessage(err.message || 'Signature request cancelled.', 'error')
+      setIsSubmitting(false)
+      return
+    }
+
     setStatusMessage('Submitting your registration...', 'neutral')
 
     fetch(`${API_BASE}/register`, {
@@ -1938,6 +1954,7 @@ function RegistrationPage({ userPublicKey, setUserPublicKey, onBack, onRegistere
       body: JSON.stringify({
         username: normalizedUsername,
         address: userPublicKey,
+        signature,
       }),
     })
       .then(async (response) => {
@@ -2025,7 +2042,7 @@ function RegistrationPage({ userPublicKey, setUserPublicKey, onBack, onRegistere
             </span>
           </div>
           <button className="primary-button" type="submit" disabled={isSubmitting}>
-            {isSubmitting ? 'Reserving...' : 'Reserve username'}
+            {isSubmitting ? <LoadingSpinner /> : 'Reserve username'}
           </button>
         </form>
         <div className={`status-card ${status.tone}`}>
