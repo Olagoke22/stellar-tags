@@ -1993,6 +1993,9 @@ function RegistrationPage({ userPublicKey, setUserPublicKey, onBack, onRegistere
           </label>
           <div className="helper-row">
             <span>3-18 characters, letters and numbers recommended.</span>
+            <span className={`char-counter${username.length >= 30 ? ' char-counter--limit' : ''}`}>
+              {username.length} / 30
+            </span>
           </div>
           <button className="primary-button" type="submit" disabled={isSubmitting}>
             {isSubmitting ? 'Reserving...' : 'Reserve username'}
