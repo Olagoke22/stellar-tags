@@ -37,72 +37,76 @@ jest.mock('generic-pool', () => ({
   })),
 }));
 
-describe('maintenanceMode middleware', () => {
-  let maintenanceMode;
-  let req;
+describe('rejectNestedObjects middleware', () => {
+  let rejectNestedObjects;
   let res;
   let next;
 
   beforeAll(() => {
-    ({ maintenanceMode } = require('./server'));
+    ({ rejectNestedObjects } = require('./server'));
   });
 
   beforeEach(() => {
-    delete process.env.MAINTENANCE_MODE;
-    req = { path: '/federation' };
     res = {
       status: jest.fn().mockReturnThis(),
-      set: jest.fn().mockReturnThis(),
       json: jest.fn().mockReturnThis(),
     };
     next = jest.fn();
   });
 
-  afterEach(() => {
-    delete process.env.MAINTENANCE_MODE;
-  });
-
-  test('passes through when MAINTENANCE_MODE is not set', () => {
-    maintenanceMode(req, res, next);
-
+  test('passes through when body contains only string values', () => {
+    rejectNestedObjects({ query: {}, body: { username: 'alice*localhost', address: 'GABC123' } }, res, next);
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  test('passes through when MAINTENANCE_MODE is "false"', () => {
-    process.env.MAINTENANCE_MODE = 'false';
-    maintenanceMode(req, res, next);
-
+  test('passes through when query contains only string values', () => {
+    rejectNestedObjects({ query: { q: 'alice*localhost' }, body: {} }, res, next);
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  test('returns 503 + Retry-After + JSON body for non-health routes', () => {
-    process.env.MAINTENANCE_MODE = 'true';
-    maintenanceMode(req, res, next);
+  test('passes through when query and body are empty', () => {
+    rejectNestedObjects({ query: {}, body: {} }, res, next);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+  });
 
+  test('passes through when body is undefined (no-body GET requests)', () => {
+    rejectNestedObjects({ query: { address: 'GABC123' }, body: undefined }, res, next);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  test('rejects 400 when body value is a nested object', () => {
+    rejectNestedObjects({ query: {}, body: { username: { $ne: '' } } }, res, next);
     expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(503);
-    expect(res.set).toHaveBeenCalledWith('Retry-After', '3600');
+    expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({
-      detail: 'Service temporarily unavailable. Please try again later.',
+      detail: 'Invalid parameter type: nested objects and arrays are not allowed.',
     });
   });
 
-  test('intercepts /register when maintenance is on', () => {
-    process.env.MAINTENANCE_MODE = 'true';
-    req.path = '/register';
-    maintenanceMode(req, res, next);
-
+  test('rejects 400 when query value is a nested object', () => {
+    rejectNestedObjects({ query: { q: { $ne: '' } }, body: {} }, res, next);
     expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  test('/health passes through when maintenance is on', () => {
-    process.env.MAINTENANCE_MODE = 'true';
-    req.path = '/health';
-    maintenanceMode(req, res, next);
+  test('rejects 400 when body value is an array', () => {
+    rejectNestedObjects({ query: {}, body: { username: ['alice', 'bob'] } }, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
 
+  test('rejects 400 when query value is an array', () => {
+    rejectNestedObjects({ query: { address: ['GABC', 'GXYZ'] }, body: {} }, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  test('passes through null values (legitimate optional param absence)', () => {
+    rejectNestedObjects({ query: { search: null }, body: {} }, res, next);
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.status).not.toHaveBeenCalled();
   });
