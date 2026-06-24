@@ -86,7 +86,9 @@ const dbPool = genericPool.createPool(
       new Promise((resolve, reject) => {
         const connection = new sqlite3.Database(dbConfig.filePath, (err) => {
           if (err) return reject(err);
-          connection.run('PRAGMA journal_mode=WAL', () => resolve(connection));
+          connection.run('PRAGMA journal_mode=WAL', () => {
+            connection.run('PRAGMA foreign_keys = ON', () => resolve(connection));
+          });
         });
       }),
     destroy: (connection) =>
@@ -175,6 +177,7 @@ fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
 const db = new sqlite3.Database(dbPath);
 db.serialize(() => {
+  db.run('PRAGMA foreign_keys = ON');
   db.run(
     `CREATE TABLE IF NOT EXISTS username_registry (
       username TEXT PRIMARY KEY,
