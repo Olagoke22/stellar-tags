@@ -1,7 +1,9 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import freighterApi from '@stellar/freighter-api'
 import { useDebounce } from './useDebounce'
-import LoadingSpinner from './components/LoadingSpinner'
+ ui/scroll-to-top
+import ScrollToTop from './ScrollToTop'
+
 
 const CONTRACT_ID = 'CDNQ7OMHIFOLZHOKWQLOGDW7CF3DRMKXJC6OULNGNBWF4O4NO2NEIGER'
 const TREASURY_ADDRESS = 'GAAFWEZKDYPXLTQGKQ3F23TXWYQUDAYTDW7P7VUQSVJFW2GWC4Y6LWST'
@@ -854,6 +856,7 @@ function Dashboard({
         onRegisterClick={() => handleNav(onRegisterClick)}
         canRegister={canRegister}
       />
+      <ScrollToTop />
     </div>
   )
 }
@@ -1019,6 +1022,7 @@ function HelpPage({
         onRegisterClick={() => handleNav(onRegisterClick)}
         canRegister={canRegister}
       />
+      <ScrollToTop />
     </div>
   )
 }
@@ -1391,6 +1395,7 @@ function AnalyticsPage({
         onRegisterClick={() => handleNav(onRegisterClick)}
         canRegister={canRegister}
       />
+      <ScrollToTop />
     </div>
   )
 }
@@ -1762,6 +1767,7 @@ function HistoryPage({
         onRegisterClick={() => handleNav(onRegisterClick)}
         canRegister={canRegister}
       />
+      <ScrollToTop />
     </div>
   )
 }
