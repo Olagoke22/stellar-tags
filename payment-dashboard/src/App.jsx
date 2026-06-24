@@ -746,12 +746,16 @@ function Dashboard({
 
                 <label>Amount (XLM)</label>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   value={amount}
-                  onChange={(event) => setAmount(event.target.value)}
+                  onChange={(event) => {
+                    const raw = event.target.value.replace(/[^0-9.]/g, '')
+                    const parts = raw.split('.')
+                    const cleaned = parts.length > 2 ? parts[0] + '.' + parts.slice(1).join('') : raw
+                    setAmount(cleaned)
+                  }}
                   placeholder="0.00"
-                  min="0.01"
-                  step="0.01"
                   disabled={!userPublicKey || isProcessing}
                 />
 
