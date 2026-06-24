@@ -493,7 +493,7 @@ function Dashboard({
            throw new Error(preparedTransaction.error.message || 'Simulation rejected by network.')
          }
       } catch (err) {
-         throw new Error(`Simulation failed: ${err.message}`)
+         throw new Error(`Simulation failed: ${err.message}`, { cause: err })
       }
 
       // --- PHASE 4: WALLET SIGNATURE ---
@@ -506,7 +506,7 @@ function Dashboard({
         })
         if (signedXdrResponse.error) throw new Error(signedXdrResponse.error)
       } catch (err) {
-        throw new Error(`Wallet signature failed: ${err.message}`)
+        throw new Error(`Wallet signature failed: ${err.message}`, { cause: err })
       }
 
       // --- PHASE 5: BLOCKCHAIN SUBMISSION ---
@@ -540,7 +540,7 @@ function Dashboard({
           throw new Error(`Blockchain rejected transaction: ${status || 'Unknown'}`)
         }
       } catch (err) {
-        throw new Error(`Submission failed: ${err.message}`)
+        throw new Error(`Submission failed: ${err.message}`, { cause: err })
       }
 
     } catch (error) {
