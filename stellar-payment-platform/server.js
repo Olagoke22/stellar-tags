@@ -3,13 +3,19 @@ const cors = require('cors');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { promisify } = require('util');
 const sqlite3 = require('sqlite3').verbose();
+const { Horizon } = require('@stellar/stellar-sdk');
+const PDFDocument = require('pdfkit');
 const { scheduleCleanupJob } = require('./src/cleanup-cron');
 const dotenv = require('dotenv');
 
 dotenv.config();
 
 const genericPool = require('generic-pool');
+
+const HORIZON_BASE = 'https://horizon-testnet.stellar.org';
+const TX_HASH_RE = /^[a-fA-F0-9]{64}$/;
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -80,13 +86,50 @@ const parseDbPath = (raw) => {
 const dbConfig = parseDbPath(rawDbPath);
 fs.mkdirSync(path.dirname(dbConfig.filePath), { recursive: true });
 
+const attachAsyncDbMethods = (db) => {
+  if (typeof db.get === 'function') {
+    db.getAsync = promisify(db.get.bind(db));
+  }
+  if (typeof db.run === 'function') {
+    db.runAsync = promisify(db.run.bind(db));
+  }
+  if (typeof db.all === 'function') {
+    db.allAsync = promisify(db.all.bind(db));
+  }
+  return db;
+};
+
+const getAsync = async (db, sql, params = []) => {
+  if (typeof db.getAsync === 'function') {
+    return db.getAsync(sql, params);
+  }
+  return promisify(db.get.bind(db))(sql, params);
+};
+
+const runAsync = async (db, sql, params = []) => {
+  if (typeof db.runAsync === 'function') {
+    return db.runAsync(sql, params);
+  }
+  return promisify(db.run.bind(db))(sql, params);
+};
+
+const allAsync = async (db, sql, params = []) => {
+  if (typeof db.allAsync === 'function') {
+    return db.allAsync(sql, params);
+  }
+  return promisify(db.all.bind(db))(sql, params);
+};
+
 const dbPool = genericPool.createPool(
   {
     create: () =>
       new Promise((resolve, reject) => {
         const connection = new sqlite3.Database(dbConfig.filePath, (err) => {
           if (err) return reject(err);
-          connection.run('PRAGMA journal_mode=WAL', () => resolve(connection));
+          attachAsyncDbMethods(connection);
+          connection.runAsync('PRAGMA journal_mode=WAL')
+            .then(() => resolve(connection))
+            .catch(reject);
         });
       }),
     destroy: (connection) =>
@@ -103,40 +146,31 @@ const dbPool = genericPool.createPool(
 );
 
 const poolGet = (sql, params) =>
-  dbPool.acquire().then(
-    (conn) =>
-      new Promise((resolve, reject) => {
-        conn.get(sql, params, (err, row) => {
-          dbPool.release(conn);
-          if (err) return reject(err);
-          resolve(row);
-        });
-      }),
-  );
+  dbPool.acquire().then(async (conn) => {
+    try {
+      return await getAsync(conn, sql, params);
+    } finally {
+      dbPool.release(conn);
+    }
+  });
 
 const poolRun = (sql, params) =>
-  dbPool.acquire().then(
-    (conn) =>
-      new Promise((resolve, reject) => {
-        conn.run(sql, params, function runCb(err) {
-          dbPool.release(conn);
-          if (err) return reject(err);
-          resolve(this);
-        });
-      }),
-  );
+  dbPool.acquire().then(async (conn) => {
+    try {
+      return await runAsync(conn, sql, params);
+    } finally {
+      dbPool.release(conn);
+    }
+  });
 
 const poolAll = (sql, params) =>
-  dbPool.acquire().then(
-    (conn) =>
-      new Promise((resolve, reject) => {
-        conn.all(sql, params, (err, rows) => {
-          dbPool.release(conn);
-          if (err) return reject(err);
-          resolve(rows);
-        });
-      }),
-  );
+  dbPool.acquire().then(async (conn) => {
+    try {
+      return await allAsync(conn, sql, params);
+    } finally {
+      dbPool.release(conn);
+    }
+  });
 
 (async () => {
   try {
@@ -173,16 +207,21 @@ const normalizeNameTag = (value) => {
 const dbPath = process.env.DB_PATH || path.join(__dirname, 'data', 'registrations.db');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-const db = new sqlite3.Database(dbPath);
-db.serialize(() => {
-  db.run(
-    `CREATE TABLE IF NOT EXISTS username_registry (
-      username TEXT PRIMARY KEY,
-      address TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    )`,
-  );
-});
+const db = attachAsyncDbMethods(new sqlite3.Database(dbPath));
+
+(async () => {
+  try {
+    await db.runAsync(
+      `CREATE TABLE IF NOT EXISTS username_registry (
+        username TEXT PRIMARY KEY,
+        address TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )`,
+    );
+  } catch (err) {
+    console.error('Failed to initialize direct database schema:', err);
+  }
+})();
 
 // Start the weekly background job that prunes/flags stale registrations.
 scheduleCleanupJob(db);
@@ -246,12 +285,19 @@ app.get('/federation', etagCache, async (req, res, next) => {
   }
 });
 
+const { StrKey } = require('@stellar/stellar-sdk');
+
 app.post('/register', async (req, res, next) => {
   const username = normalizeNameTag(req.body.username);
   const address = typeof req.body.address === 'string' ? req.body.address.trim() : '';
+  const signature = typeof req.body.signature === 'string' ? req.body.signature.trim() : '';
 
   if (!username || !address) {
-    const error = new Error('username and address are required');
+    return res.status(400).json({ error: 'Missing required fields: username and address are both required.' });
+  }
+
+  if (!StrKey.isValidEd25519PublicKey(address)) {
+    const error = new Error('Invalid Stellar Public Key format.');
     error.statusCode = 400;
     return next(error);
   }
@@ -344,6 +390,69 @@ app.get('/users', async (req, res, next) => {
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+app.get('/api/v1/receipts/:txHash', async (req, res) => {
+  const { txHash } = req.params;
+
+  if (!TX_HASH_RE.test(txHash)) {
+    return res.status(400).json({ detail: 'Invalid transaction hash format' });
+  }
+
+  let tx;
+  let paymentOps;
+
+  try {
+    const server = new Horizon.Server(HORIZON_BASE);
+    [tx, paymentOps] = await Promise.all([
+      server.transactions().transaction(txHash).call(),
+      server.payments().forTransaction(txHash).call(),
+    ]);
+  } catch (err) {
+    if (err && err.response && err.response.status === 404) {
+      return res.status(404).json({ detail: 'Transaction not found' });
+    }
+    return res.status(500).json({ detail: 'Failed to fetch transaction' });
+  }
+
+  const timestamp = tx.created_at
+    ? new Date(tx.created_at).toUTCString()
+    : 'Unknown';
+
+  const nativeOp = (paymentOps.records || []).find(
+    (op) => op.asset_type === 'native',
+  );
+
+  const sender = nativeOp ? nativeOp.from : tx.source_account;
+  const receiver = nativeOp ? nativeOp.to : 'Contract invocation';
+  const amount = nativeOp ? `${nativeOp.amount} XLM` : 'See Stellar Explorer';
+
+  const safeHash = txHash.replace(/[^a-fA-F0-9]/g, '');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="receipt-${safeHash}.pdf"`,
+  );
+
+  const doc = new PDFDocument({ margin: 50 });
+  doc.pipe(res);
+
+  doc
+    .fontSize(20)
+    .text('Stellar Transaction Receipt', { align: 'center' })
+    .moveDown(1.5);
+
+  doc.fontSize(11).text(`Transaction Hash: ${txHash}`).moveDown(0.5);
+  doc.text(`Timestamp:        ${timestamp}`).moveDown(0.5);
+  doc.text(`Sender:           ${sender}`).moveDown(0.5);
+  doc.text(`Receiver:         ${receiver}`).moveDown(0.5);
+  doc.text(`Amount:           ${amount}`).moveDown(1.5);
+
+  doc.fontSize(9).fillColor('#888888').text('Generated by Stellar Pay — Testnet', {
+    align: 'center',
+  });
+
+  doc.end();
 });
 
 app.use((err, req, res, next) => {
