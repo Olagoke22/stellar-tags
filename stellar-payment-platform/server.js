@@ -1,17 +1,18 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+require('dotenv').config();
 const rateLimit = require('express-rate-limit');
 const RedisStore = require('rate-limit-redis');
 const { createClient } = require('redis');
 const xss = require('xss');
+
 const { Horizon, StrKey } = require('@stellar/stellar-sdk');
 const PDFDocument = require('pdfkit');
 const { prisma } = require('./prismaClient');
 const { scheduleCleanupJob } = require('./src/cleanup-cron');
 const timeout = require('connect-timeout');
-
-require('dotenv').config();
+const logger = require('./logger');
 
 const HORIZON_BASE = 'https://horizon-testnet.stellar.org';
 const TX_HASH_RE = /^[a-fA-F0-9]{64}$/;
@@ -53,7 +54,7 @@ const redisClient = process.env.REDIS_URL ? createClient({
   url: process.env.REDIS_URL
 }) : null;
 if (redisClient) {
-  redisClient.connect().catch(console.error);
+  redisClient.connect().catch((err) => logger.error({ err }, 'Redis connection failed'));
 }
 
 const limiter = rateLimit({
@@ -64,7 +65,6 @@ const limiter = rateLimit({
   }) : undefined,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later.' },
 });
 
 app.use(cors(corsOptions));
@@ -506,7 +506,7 @@ app.use((err, _req, res) => {
 
   if (statusCode === 500) {
     const errorId = crypto.randomUUID();
-    console.error(`[Error ID: ${errorId}]`, err);
+    logger.error({ err, errorId }, 'Unhandled server error');
     return res.status(500).json({
       success: false,
       error: 'Internal Server Error',
@@ -529,10 +529,10 @@ const gracefulShutdown = (server, pool, signal) => {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  console.log(`\nReceived ${signal}. Shutting down gracefully...`);
+  logger.info({ signal }, 'Received signal, shutting down gracefully');
 
   const timer = setTimeout(() => {
-    console.error(`Graceful shutdown timed out after ${SHUTDOWN_TIMEOUT_MS / 1000}s, forcing exit.`);
+    logger.fatal({ timeoutMs: SHUTDOWN_TIMEOUT_MS }, 'Graceful shutdown timed out, forcing exit');
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS);
 
@@ -542,28 +542,20 @@ const gracefulShutdown = (server, pool, signal) => {
       await pool.drain();
       await pool.clear();
     } catch (err) {
-      console.error('Error draining DB pool during shutdown:', err);
+      logger.error({ err }, 'Error draining DB pool during shutdown');
     }
     process.exit(0);
   });
 };
-app.use((err, req, res) => {
-  console.error(err.stack);
-  const statusCode = err.statusCode || 500;
-  res.status(statusCode).json({
-    success: false,
-    message: err.message || 'Internal Server Error',
-    detail: process.env.NODE_ENV === 'development' ? err.stack : 'Check server logs for details'
-  });
-});
+
 if (require.main === module) {
   const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server successfully initialized on port ${PORT}`);
+    logger.info({ port: PORT }, 'Server successfully initialized');
   });
 
   server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
-      console.error(`Port ${PORT} is in use, forcing shutdown so Railway can restart cleanly.`);
+      logger.fatal({ port: PORT }, 'Port in use, forcing shutdown for clean restart');
       process.exit(1);
     }
   });
