@@ -160,7 +160,7 @@ app.get('/federation', etagCache, async (req, res, next) => {
       // Reverse lookup: search by Stellar address (case-insensitive)
       const row = await prisma.user.findFirst({
         where: { address: { equals: queryValue, mode: 'insensitive' } },
-        select: { username: true, address: true },
+        select: { username: true, address: true, memoType: true, memo: true },
       });
 
       if (!row) {
@@ -169,13 +169,15 @@ app.get('/federation', etagCache, async (req, res, next) => {
         return next(notFoundError);
       }
 
-      // Return federation response for address lookup
-      return res.json({
+      const response = {
         stellar_address: `${row.username}*${process.env.DOMAIN || 'localhost'}`,
         account_id: row.address,
-        memo_type: 'text',
-        memo: 'PlatformPayment',
-      });
+      };
+      if (row.memoType) {
+        response.memo_type = row.memoType;
+        response.memo = row.memo;
+      }
+      return res.json(response);
     } else if (type === 'name' || !type) {
       // Default: lookup by username (backward compatible)
       // Normalize the name tag (e.g., "alice*localhost") and lowercase it.
@@ -184,7 +186,7 @@ app.get('/federation', etagCache, async (req, res, next) => {
 
       const row = await prisma.user.findUnique({
         where: { username: queryName },
-        select: { address: true },
+        select: { address: true, memoType: true, memo: true },
       });
 
       // Fallback to hardcoded USER_DATABASE for backward compatibility
@@ -196,12 +198,15 @@ app.get('/federation', etagCache, async (req, res, next) => {
         return next(notFoundError);
       }
 
-      return res.json({
+      const response = {
         stellar_address: address,
         account_id: address,
-        memo_type: 'text',
-        memo: 'PlatformPayment',
-      });
+      };
+      if (row?.memoType) {
+        response.memo_type = row.memoType;
+        response.memo = row.memo;
+      }
+      return res.json(response);
     } else {
       // Unsupported type parameter
       return res.status(400).json({
@@ -215,9 +220,39 @@ app.get('/federation', etagCache, async (req, res, next) => {
   }
 });
 
+const VALID_MEMO_TYPES = ['text', 'id', 'hash'];
+const MEMO_ID_RE = /^\d+$/;
+const MEMO_HASH_RE = /^[0-9a-fA-F]{64}$/;
+
+const validateMemo = (memoType, memo) => {
+  if (!memoType && !memo) return null;
+  if (memoType && !memo) return 'memo is required when memo_type is provided.';
+  if (!memoType && memo) return 'memo_type is required when memo is provided.';
+  if (!VALID_MEMO_TYPES.includes(memoType)) {
+    return `memo_type must be one of: ${VALID_MEMO_TYPES.join(', ')}.`;
+  }
+  if (memoType === 'text' && Buffer.byteLength(memo, 'utf8') > 28) {
+    return 'memo of type text must not exceed 28 bytes.';
+  }
+  if (memoType === 'id') {
+    if (!MEMO_ID_RE.test(memo) || BigInt(memo) > 18446744073709551615n) {
+      return 'memo of type id must be a valid 64-bit unsigned integer.';
+    }
+  }
+  if (memoType === 'hash' && !MEMO_HASH_RE.test(memo)) {
+    return 'memo of type hash must be a 64-character hex string (32 bytes).';
+  }
+  return null;
+};
+
 app.post('/register', async (req, res, next) => {
+  if (!req.is('application/json')) {
+    return res.status(415).json({ error: "Unsupported Media Type. Please send application/json" });
+  }
   const username = normalizeNameTag(req.body.username);
   const address = typeof req.body.address === 'string' ? req.body.address.trim() : '';
+  const memoType = typeof req.body.memo_type === 'string' ? req.body.memo_type.trim() : undefined;
+  const memo = typeof req.body.memo === 'string' ? req.body.memo.trim() : undefined;
 
   if (address.toUpperCase().startsWith('S')) {
     return res.status(400).json({ error: "Never share your Secret Key. Please register using your Public Key (starts with G)." });
@@ -227,10 +262,20 @@ app.post('/register', async (req, res, next) => {
     return res.status(400).json({ error: 'Missing required fields: username and address are both required.' });
   }
 
+  const usernameLocalPart = username.includes('*') ? username.split('*')[0] : username;
+  if (usernameLocalPart.length < 3) {
+    return res.status(400).json({ error: "Username must be at least 3 characters long." });
+  }
+
   if (!StrKey.isValidEd25519PublicKey(address)) {
     const error = new Error('Invalid Stellar Public Key format.');
     error.statusCode = 400;
     return next(error);
+  }
+
+  const memoError = validateMemo(memoType, memo);
+  if (memoError) {
+    return res.status(400).json({ error: memoError });
   }
 
   // Convert to lowercase for case-insensitive storage
@@ -248,7 +293,11 @@ app.post('/register', async (req, res, next) => {
     }
 
     await prisma.user.create({
-      data: { username: normalizedUsername, address },
+      data: {
+        username: normalizedUsername,
+        address,
+        ...(memoType && { memoType, memo }),
+      },
     });
 
     return res.status(201).json({
@@ -256,17 +305,11 @@ app.post('/register', async (req, res, next) => {
       username: normalizedUsername,
       address,
       federation_address: `${normalizedUsername}*${process.env.DOMAIN || 'localhost'}`,
+      ...(memoType && { memo_type: memoType, memo }),
     });
   } catch (error) {
-    // P2002 — unique constraint violation (username or address already taken)
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      const target = error.meta?.target;
-      const isAddress = Array.isArray(target)
-        ? target.includes('address')
-        : typeof target === 'string' && target.includes('address');
-      const conflictError = new Error(isAddress ? 'Address already registered' : 'Username already registered');
-      conflictError.statusCode = 409;
-      return next(conflictError);
+    if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.includes('UNIQUE'))) {
+      return res.status(409).json({ error: 'Username is already taken. Please choose another.' });
     }
     const registrationError = new Error('Failed to save registration');
     registrationError.statusCode = 500;
@@ -528,7 +571,23 @@ const gracefulShutdown = (server, pool, signal) => {
     process.exit(0);
   });
 };
+app.use((err, req, res, next) => {
+  // 1. Print the full error stack trace to the console (Viewable in Vercel Logs)
+  console.error('\n❌ CRITICAL BACKEND ERROR:');
+  console.error(err.stack);
+  console.error('============================\n');
 
+  // 2. Determine the status code (default to 500 Internal Server Error)
+  const statusCode = err.statusCode || 500;
+
+  // 3. Send a clean JSON response to the frontend so the request doesn't hang forever
+  res.status(statusCode).json({
+    success: false,
+    message: err.message || 'Internal Server Error',
+    // Only send the raw error details to the frontend if you are testing locally
+    detail: process.env.NODE_ENV === 'development' ? err.stack : 'Check server logs for details'
+  });
+});
 if (require.main === module) {
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server successfully initialized on port ${PORT}`);

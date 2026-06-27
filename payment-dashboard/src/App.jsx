@@ -1,8 +1,13 @@
  #54-Refactor-API-Route-Architecture-to-Support-Explicit-Versioning-(/api/v1)-FIX
+ #54-Refactor-API-Route-Architecture-to-Support-Explicit-Versioning-(/api/v1)-FIX
+ main
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import freighterApi from '@stellar/freighter-api'
 import { useLatencyTracker } from './useLatencyTracker'
 import LatencyGauge from './LatencyGauge'
+ #54-Refactor-API-Route-Architecture-to-Support-Explicit-Versioning-(/api/v1)-FIX
+import NetworkBadge from './NetworkBadge'
+ main
 import { useDebounce } from './useDebounce'
 import ScrollToTop from './ScrollToTop'
 import LoadingSpinner from './components/LoadingSpinner'
@@ -11,6 +16,7 @@ import LoadingSpinner from './components/LoadingSpinner'
 const CONTRACT_ID = 'CDNQ7OMHIFOLZHOKWQLOGDW7CF3DRMKXJC6OULNGNBWF4O4NO2NEIGER'
 const TREASURY_ADDRESS = 'GAAFWEZKDYPXLTQGKQ3F23TXWYQUDAYTDW7P7VUQSVJFW2GWC4Y6LWST'
 const TOKEN_ADDRESS = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC'
+ #54-Refactor-API-Route-Architecture-to-Support-Explicit-Versioning-(/api/v1)-FIX
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import freighterApi from "@stellar/freighter-api";
@@ -25,6 +31,8 @@ const TREASURY_ADDRESS =
 const TOKEN_ADDRESS =
   "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
  main
+
+main
 const API_BASE = "https://stellar-tags-production.up.railway.app";
 const DEFAULT_FEDERATION_DOMAIN = "localhost";
 const HORIZON_BASE = "https://horizon-testnet.stellar.org";
@@ -825,6 +833,11 @@ function Dashboard({
     }
   };
 
+  const handleMaxClick = () => {
+    const maxSpendable = Math.max(0, parseFloat(balance) - 1.00001)
+    setAmount(maxSpendable.toFixed(5).toString())
+  }
+
   const handleDisconnect = () => {
     setIsWalletMenuOpen(false);
     onDisconnectWallet();
@@ -903,8 +916,8 @@ function Dashboard({
             </p>
           </div>
           <div className="topbar-actions">
-            <span className="chip">Testnet</span>
-            <LatencyGauge
+            <NetworkBadge />
+            <LatencyGauge 
               latency={latencyTracker.latency}
               status={latencyTracker.status}
             />
@@ -1021,6 +1034,9 @@ function Dashboard({
                   placeholder="0.00"
                   disabled={!userPublicKey || isProcessing}
                 />
+                {balance !== null && Number(amount) > 0 && Number(amount) > balance && (
+                  <p className="balance-error">Insufficient XLM balance.</p>
+                )}
 
                 <div className="form-actions">
                   <button
@@ -1031,7 +1047,8 @@ function Dashboard({
                       !userPublicKey ||
                       isProcessing ||
                       !amount ||
-                      Number(amount) <= 0
+                      Number(amount) <= 0 ||
+                      (balance !== null && Number(amount) > balance)
                     }
                   >
                     {isProcessing ? <LoadingSpinner /> : "Transfer"}
@@ -1651,7 +1668,7 @@ function AnalyticsPage({
             </p>
           </div>
           <div className="topbar-actions">
-            <span className="chip">Testnet</span>
+            <NetworkBadge />
             <div className="wallet-menu" ref={menuRef}>
               <button
                 type="button"
@@ -2006,7 +2023,7 @@ function HistoryPage({
           </div>
           <div className="topbar-actions">
             <span className="chip">Last 24 hours</span>
-            <span className="chip">Testnet</span>
+            <NetworkBadge />
             <div className="wallet-menu" ref={menuRef}>
               <button
                 type="button"
@@ -2253,9 +2270,12 @@ function MobileNav({
 }
 
  #54-Refactor-API-Route-Architecture-to-Support-Explicit-Versioning-(/api/v1)-FIX
+ #54-Refactor-API-Route-Architecture-to-Support-Explicit-Versioning-(/api/v1)-FIX
 const USERNAME_REGEX = /^[a-zA-Z0-9_-]+$/
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_\-]+$/;
+ main
+const USERNAME_REGEX = /^[a-zA-Z0-9_-]+$/;
  main
 
 function RegistrationPage({
